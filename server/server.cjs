@@ -8,6 +8,7 @@ const fs = require("fs");
 const bcrypt = require("bcrypt");
 const sqlite3 = require("sqlite3").verbose();
 const multer = require("multer");
+const { v4: uuidv4 } = require("uuid");
 
 const app = express();
 const server = http.createServer(app);
@@ -15,6 +16,7 @@ const wss = new WebSocketServer({ server, path: "/ws/chat" });
 
 app.use(cors());
 app.use(express.json());
+app.use(express.urlencoded({extended:true}));
 
 // In-memory store for rooms
 // Now structured as { [roomId]: { name, messages: [] } }
@@ -37,6 +39,18 @@ const upload = multer({
 // Ensure uploads/avatars directory exists
 fs.mkdirSync(path.join(__dirname, "uploads/avatars"), { recursive: true });
 
+// Save chat message to SQLite
+function saveMessageToDB({ room, sender, content, fileUrl, fileName, fileSize, time }) {
+  db.run(
+    `INSERT INTO messages (room_id, sender, content, file_url, file_name, file_size, time)
+     VALUES (?, ?, ?, ?, ?, ?, ?)`,
+    [room, sender, content, fileUrl || null, fileName || null, fileSize || null, time],
+    (err) => {
+      if (err) console.error('Failed to save message to DB:', err);
+    }
+  );
+}
+
 // WebSocket connection
 wss.on("connection", (ws) => {
   ws.roomId = "room-3"; // Default fallback room
@@ -54,14 +68,20 @@ wss.on("connection", (ws) => {
         ws.roomId = room;
 
       } else if (data.type === "message") {
-        const { room, content, sender, time } = data;
+        const { room, content, sender, time, fileUrl, fileName, fileSize, id } = data;
         const msgObj = { content, sender, time };
-
-        // Save message to room history
+        if (fileUrl && fileName && fileSize) {
+          msgObj.fileUrl = fileUrl;
+          msgObj.fileName = fileName;
+          msgObj.fileSize = fileSize;
+        }
+        msgObj.id = id || uuidv4();
+        // Save message to room history (in-memory)
         if (rooms[room]) {
           rooms[room].messages.push(msgObj);
         }
-
+        // Save message to DB
+        saveMessageToDB({ room, sender, content, fileUrl, fileName, fileSize, time });
         // Broadcast to everyone in that room
         wss.clients.forEach((client) => {
           if (
@@ -107,13 +127,17 @@ app.get("/api/rooms", (req, res) => {
   res.json(formattedRooms);
 });
 
-// REST: Get messages of a specific room
+// REST: Get messages of a specific room (from DB)
 app.get("/api/rooms/:roomId/messages", (req, res) => {
   const { roomId } = req.params;
-  if (!rooms[roomId]) {
-    return res.status(404).json({ error: "Room not found" });
-  }
-  res.json(rooms[roomId].messages);
+  db.all(
+    `SELECT sender, content, file_url as fileUrl, file_name as fileName, file_size as fileSize, time FROM messages WHERE room_id = ? ORDER BY id ASC`,
+    [roomId],
+    (err, rows) => {
+      if (err) return res.status(500).json({ error: "Failed to fetch messages" });
+      res.json(rows);
+    }
+  );
 });
 
 // Signup endpoint

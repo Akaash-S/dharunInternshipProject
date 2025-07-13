@@ -1,6 +1,7 @@
 import React, { useEffect, useRef, useState } from "react";
 import { SendHorizonal, MessageCircle, PlusCircle, Paperclip } from "lucide-react";
 import toast from "react-hot-toast";
+import { v4 as uuidv4 } from "uuid";
 
 function Chats() {
   const [rooms, setRooms] = useState([]);
@@ -10,6 +11,8 @@ function Chats() {
   const [newRoomName, setNewRoomName] = useState("");
   const scrollRef = useRef(null);
   const socketRef = useRef(null);
+  const user = JSON.parse(localStorage.getItem("user"));
+  const [isOnline, setIsOnline] = useState(navigator.onLine);
 
   useEffect(() => {
     let storedRooms = [];
@@ -21,7 +24,6 @@ function Chats() {
     }
 
     const storedActiveRoom = JSON.parse(localStorage.getItem("activeRoom"));
-    const storedMessages = JSON.parse(localStorage.getItem("chatMessages"));
 
     fetch("http://localhost:8000/api/rooms")
       .then((res) => res.json())
@@ -34,19 +36,27 @@ function Chats() {
         const selectedRoom = storedActiveRoom || defaultRoom;
 
         setActiveRoom(selectedRoom);
-        setMessages(storedMessages?.[selectedRoom?.id] || []);
       })
       .catch(() => {
         setRooms(storedRooms);
         if (storedRooms.length > 0) {
           const fallbackRoom = storedActiveRoom || storedRooms[0];
           setActiveRoom(fallbackRoom);
-          setMessages(storedMessages?.[fallbackRoom?.id] || []);
         }
         toast.error("Failed to load rooms from server, using local fallback");
       });
   }, []);
 
+  // Fetch messages from backend when activeRoom changes
+  useEffect(() => {
+    if (!activeRoom) return;
+    fetch(`http://localhost:8000/api/rooms/${activeRoom.id}/messages`)
+      .then((res) => res.json())
+      .then((msgs) => setMessages(msgs))
+      .catch(() => setMessages([]));
+  }, [activeRoom]);
+
+  // WebSocket for real-time updates
   useEffect(() => {
     if (!activeRoom) return;
 
@@ -61,12 +71,7 @@ function Chats() {
     socketRef.current.onmessage = (event) => {
       const data = JSON.parse(event.data);
       if (data.type === "message") {
-        const updatedMessages = [...messages, data.message];
-        setMessages(updatedMessages);
-
-        const storedMessages = JSON.parse(localStorage.getItem("chatMessages")) || {};
-        storedMessages[activeRoom.id] = updatedMessages;
-        localStorage.setItem("chatMessages", JSON.stringify(storedMessages));
+        setMessages((prev) => [...prev, data.message]);
       }
     };
 
@@ -80,40 +85,44 @@ function Chats() {
     scrollRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [messages]);
 
+  useEffect(() => {
+    const updateStatus = () => setIsOnline(navigator.onLine);
+    window.addEventListener("online", updateStatus);
+    window.addEventListener("offline", updateStatus);
+    return () => {
+      window.removeEventListener("online", updateStatus);
+      window.removeEventListener("offline", updateStatus);
+    };
+  }, []);
+
+  const getDisplayName = (user) => user?.name || user?.email || "Anonymous";
+
   const handleSend = () => {
     if (!input.trim()) return;
     const message = {
       type: "message",
       room: activeRoom.id,
       content: input,
-      sender: "You",
+      sender: getDisplayName(user),
       time: new Date().toLocaleTimeString([], {
         hour: "2-digit",
         minute: "2-digit",
       }),
+      id: uuidv4(),
     };
     socketRef.current.send(JSON.stringify(message));
-    const updatedMessages = [...messages, message];
-    setMessages(updatedMessages);
     setInput("");
-
-    const storedMessages = JSON.parse(localStorage.getItem("chatMessages")) || {};
-    storedMessages[activeRoom.id] = updatedMessages;
-    localStorage.setItem("chatMessages", JSON.stringify(storedMessages));
   };
 
   const handleFileUpload = (e) => {
     const file = e.target.files[0];
     if (!file) return;
-
     const reader = new FileReader();
     reader.onload = (event) => {
       const timestamp = new Date().toLocaleTimeString([], {
         hour: "2-digit",
         minute: "2-digit",
       });
-
-      // Message to be sent via WebSocket
       const message = {
         type: "message",
         room: activeRoom.id,
@@ -121,33 +130,12 @@ function Chats() {
         fileUrl: event.target.result,
         fileName: file.name,
         fileSize: `${(file.size / 1024).toFixed(1)} KB`,
-        sender: "You",
+        sender: getDisplayName(user),
         time: timestamp,
+        id: uuidv4(),
       };
-
-      // Send message to WebSocket
       socketRef.current.send(JSON.stringify(message));
-
-      // Update chat messages in state and localStorage
-      const updatedMessages = [...messages, message];
-      setMessages(updatedMessages);
-
-      const storedMessages = JSON.parse(localStorage.getItem("chatMessages")) || {};
-      storedMessages[activeRoom.id] = updatedMessages;
-      localStorage.setItem("chatMessages", JSON.stringify(storedMessages));
-
-      // 🔥 Store uploaded file metadata separately for use in Files.jsx
-      const uploadedFiles = JSON.parse(localStorage.getItem("uploadedFiles")) || [];
-      uploadedFiles.push({
-        roomId: activeRoom.id,
-        fileName: file.name,
-        fileSize: `${(file.size / 1024).toFixed(1)} KB`,
-        fileUrl: event.target.result,
-        time: timestamp,
-      });
-      localStorage.setItem("uploadedFiles", JSON.stringify(uploadedFiles));
     };
-
     reader.readAsDataURL(file);
   };
 
@@ -156,8 +144,11 @@ function Chats() {
     setActiveRoom(room);
     localStorage.setItem("activeRoom", JSON.stringify(room));
 
-    const storedMessages = JSON.parse(localStorage.getItem("chatMessages")) || {};
-    setMessages(storedMessages[room.id] || []);
+    // Fetch messages for the new room
+    fetch(`http://localhost:8000/api/rooms/${room.id}/messages`)
+      .then((res) => res.json())
+      .then((msgs) => setMessages(msgs))
+      .catch(() => setMessages([]));
 
     socketRef.current?.send(
       JSON.stringify({ type: "join", room: room.id })
@@ -192,6 +183,8 @@ function Chats() {
 
     toast.success("Room created successfully");
   };
+
+  const isImage = (fileName) => /\.(jpg|jpeg|png|gif|bmp|webp)$/i.test(fileName);
 
   return (
     <div className="flex h-full">
@@ -238,10 +231,14 @@ function Chats() {
       </div>
 
       <div className="flex-1 flex flex-col bg-gray-50">
-        <div className="p-4 border-b border-gray-200 bg-white shadow-sm">
+        <div className="p-4 border-b border-gray-200 bg-white shadow-sm flex items-center justify-between">
           <h3 className="text-lg font-semibold text-gray-800">
             {activeRoom?.name || "Select a Room"}
           </h3>
+          <div className="flex items-center gap-2">
+            <div className={`w-3 h-3 rounded-full ${isOnline ? "bg-green-500" : "bg-red-500"}`} title={isOnline ? "Online" : "Offline"}></div>
+            <span className="text-xs text-gray-600">{isOnline ? "Online" : "Offline"}</span>
+          </div>
         </div>
 
         <div className="flex-1 overflow-y-auto p-4 space-y-3">
@@ -250,20 +247,28 @@ function Chats() {
               No messages yet. Start the convo 👇
             </p>
           )}
-          {messages.map((msg, idx) => (
-            <div key={idx} className="flex flex-col items-end">
-              <div className="bg-blue-600 text-white px-4 py-2 rounded-lg max-w-xs">
-                {msg.fileUrl ? (
-                  <a href={msg.fileUrl} download={msg.fileName} className="underline">
-                    📎 {msg.fileName} ({msg.fileSize})
-                  </a>
-                ) : (
-                  msg.content
-                )}
+          {messages.map((msg, idx) => {
+            const isMine = user && (msg.sender === (user.name || user.email));
+            return (
+              <div key={msg.id || idx} className={`flex flex-col ${isMine ? 'items-end' : 'items-start'}`}>
+                <div className={`px-4 py-2 rounded-lg max-w-xs ${isMine ? 'bg-blue-600 text-white' : 'bg-green-600 text-white'}`}>
+                  <div className="font-bold text-xs mb-1">{msg.sender}</div>
+                  {msg.fileUrl ? (
+                    isImage(msg.fileName) ? (
+                      <img src={msg.fileUrl} alt={msg.fileName} className="max-w-full max-h-40 rounded mt-1" />
+                    ) : (
+                      <a href={msg.fileUrl} target="_blank" rel="noopener noreferrer" className="underline">
+                        🔗 View {msg.fileName} ({msg.fileSize})
+                      </a>
+                    )
+                  ) : (
+                    msg.content
+                  )}
+                </div>
+                <span className="text-xs text-gray-400 mt-1">{msg.time}</span>
               </div>
-              <span className="text-xs text-gray-400 mt-1">{msg.time}</span>
-            </div>
-          ))}
+            );
+          })}
           <div ref={scrollRef} />
         </div>
 
