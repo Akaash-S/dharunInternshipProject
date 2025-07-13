@@ -5,7 +5,7 @@ const EXPORT_OPTIONS = [
     key: "messages",
     label: "Messages",
     api: "http://localhost:8000/api/export/messages",
-    fetchApi: "http://localhost:8000/api/rooms/room-3/messages",
+    fetchApi: "http://localhost:8000/api/rooms/", // Will append room id dynamically
     columns: [
       { key: "sender", label: "Sender" },
       { key: "content", label: "Content" },
@@ -18,7 +18,7 @@ const EXPORT_OPTIONS = [
     key: "users",
     label: "Users",
     api: "http://localhost:8000/api/export/users",
-    fetchApi: "http://localhost:8000/api/export/users",
+    fetchApi: "http://localhost:8000/api/export/users/json",
     columns: [
       { key: "email", label: "Email" },
       { key: "password", label: "Password (hashed)" },
@@ -29,7 +29,7 @@ const EXPORT_OPTIONS = [
     key: "rooms",
     label: "Rooms",
     api: "http://localhost:8000/api/export/rooms",
-    fetchApi: "http://localhost:8000/api/export/rooms",
+    fetchApi: "http://localhost:8000/api/export/rooms/json",
     columns: [
       { key: "id", label: "Room ID" },
       { key: "name", label: "Room Name" },
@@ -50,9 +50,44 @@ function Exports() {
   const [status, setStatus] = useState("");
   const [data, setData] = useState([]);
   const [jsonData, setJsonData] = useState(null);
+  const [rooms, setRooms] = useState([]);
+  const [selectedRoom, setSelectedRoom] = useState("");
+  const [password, setPassword] = useState("");
+  const [isAuthenticated, setIsAuthenticated] = useState(false);
 
   const option = EXPORT_OPTIONS.find((o) => o.key === selected);
 
+  // Check password against env variable
+  const checkPassword = () => {
+    const envPassword = import.meta.env.VITE_EXPORT_PASSWORD;
+    if (!envPassword) {
+      setStatus("Export password is not set in environment variables.");
+      return;
+    }
+    if (password === envPassword) {
+      setIsAuthenticated(true);
+      setStatus("");
+    } else {
+      setStatus("Incorrect password.");
+    }
+  };
+
+  // Fetch rooms on mount
+  useEffect(() => {
+    if (selected === "messages") {
+      fetch("http://localhost:8000/api/rooms")
+        .then((res) => res.json())
+        .then((rooms) => {
+          setRooms(rooms);
+          if (rooms.length > 0) {
+            setSelectedRoom(rooms[0].id);
+          }
+        })
+        .catch(() => setRooms([]));
+    }
+  }, [selected]);
+
+  // Fetch data when selected export type or selectedRoom changes
   useEffect(() => {
     setStatus("");
     if (selected === "all") {
@@ -60,13 +95,18 @@ function Exports() {
         .then((res) => res.json())
         .then((json) => setJsonData(json))
         .catch(() => setJsonData(null));
-    } else {
+    } else if (selected === "messages" && selectedRoom) {
+      fetch(`http://localhost:8000/api/rooms/${selectedRoom}/messages`)
+        .then((res) => res.json())
+        .then((rows) => setData(Array.isArray(rows) ? rows : []))
+        .catch(() => setData([]));
+    } else if (selected !== "messages") {
       fetch(option.fetchApi)
         .then((res) => res.json())
         .then((rows) => setData(Array.isArray(rows) ? rows : []))
         .catch(() => setData([]));
     }
-  }, [selected, option.fetchApi]);
+  }, [selected, option.fetchApi, selectedRoom]);
 
   const handleDownload = async () => {
     setDownloading(true);
@@ -87,12 +127,36 @@ function Exports() {
       a.remove();
       window.URL.revokeObjectURL(url);
       setStatus("Download successful!");
-    } catch (err) {
+    } catch {
       setStatus("Download failed. Please try again.");
     } finally {
       setDownloading(false);
     }
   };
+
+  if (!isAuthenticated) {
+    return (
+      <div className="flex flex-col items-center justify-center min-h-screen bg-gray-100">
+        <div className="bg-white p-8 rounded-lg shadow-md flex flex-col items-center w-full max-w-md">
+          <h1 className="text-2xl font-bold mb-4 text-blue-700">Protected Export</h1>
+          <input
+            type="password"
+            value={password}
+            onChange={e => setPassword(e.target.value)}
+            placeholder="Enter export password"
+            className="mb-4 px-4 py-2 border border-gray-300 rounded w-full"
+          />
+          <button
+            onClick={checkPassword}
+            className="bg-blue-600 hover:bg-blue-700 text-white px-6 py-2 rounded font-semibold w-full"
+          >
+            Unlock
+          </button>
+          {status && <div className="mt-4 text-sm text-red-600">{status}</div>}
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="flex flex-col items-center justify-center min-h-screen bg-gray-100">
@@ -112,6 +176,21 @@ function Exports() {
         <div className="mb-4 p-2 bg-gray-200 rounded text-sm text-gray-800 w-full text-center">
           <code>{option.api}</code>
         </div>
+        {selected === "messages" && rooms.length > 0 && (
+          <div className="mb-4 w-full flex items-center gap-2">
+            <label htmlFor="room-select" className="font-semibold text-blue-700">Room:</label>
+            <select
+              id="room-select"
+              value={selectedRoom}
+              onChange={e => setSelectedRoom(e.target.value)}
+              className="border px-2 py-1 rounded"
+            >
+              {rooms.map(room => (
+                <option key={room.id} value={room.id}>{room.name}</option>
+              ))}
+            </select>
+          </div>
+        )}
         <button
           onClick={handleDownload}
           disabled={downloading}
@@ -128,6 +207,7 @@ function Exports() {
               {jsonData ? JSON.stringify(jsonData, null, 2) : "No data found."}
             </pre>
           ) : (
+            <>
             <table className="min-w-full border text-sm">
               <thead>
                 <tr className="bg-gray-100">
@@ -152,6 +232,9 @@ function Exports() {
                 )}
               </tbody>
             </table>
+            {/* Debug output for troubleshooting */}
+            <pre className="bg-yellow-50 text-xs text-gray-700 mt-4 p-2 rounded border border-yellow-200">{JSON.stringify(data, null, 2)}</pre>
+            </>
           )}
         </div>
       </div>

@@ -14,46 +14,45 @@ function Chats() {
   const user = JSON.parse(localStorage.getItem("user"));
   const [isOnline, setIsOnline] = useState(navigator.onLine);
 
-  useEffect(() => {
-    let storedRooms = [];
+  // Helper to fetch rooms from backend
+  const fetchRooms = async () => {
     try {
-      const raw = localStorage.getItem("chatRooms");
-      storedRooms = Array.isArray(JSON.parse(raw)) ? JSON.parse(raw) : [];
+      const res = await fetch("http://localhost:8000/api/rooms");
+      const data = await res.json();
+      setRooms(Array.isArray(data) ? data : []);
+      localStorage.setItem("chatRooms", JSON.stringify(data));
+      return data;
     } catch {
-      storedRooms = [];
+      setRooms([]);
+      return [];
     }
+  };
 
-    const storedActiveRoom = JSON.parse(localStorage.getItem("activeRoom"));
+  // Helper to fetch messages for a room
+  const fetchMessages = async (roomId) => {
+    try {
+      const res = await fetch(`http://localhost:8000/api/rooms/${roomId}/messages`);
+      const msgs = await res.json();
+      setMessages(Array.isArray(msgs) ? msgs : []);
+    } catch {
+      setMessages([]);
+    }
+  };
 
-    fetch("http://localhost:8000/api/rooms")
-      .then((res) => res.json())
-      .then((data) => {
-        if (!Array.isArray(data)) throw new Error("Invalid rooms response");
-        setRooms(data);
-        localStorage.setItem("chatRooms", JSON.stringify(data));
-
-        const defaultRoom = data.find((room) => room.id === "room-3") || data[0];
-        const selectedRoom = storedActiveRoom || defaultRoom;
-
-        setActiveRoom(selectedRoom);
-      })
-      .catch(() => {
-        setRooms(storedRooms);
-        if (storedRooms.length > 0) {
-          const fallbackRoom = storedActiveRoom || storedRooms[0];
-          setActiveRoom(fallbackRoom);
-        }
-        toast.error("Failed to load rooms from server, using local fallback");
-      });
+  useEffect(() => {
+    // On mount, fetch rooms and set active room
+    (async () => {
+      const data = await fetchRooms();
+      const storedActiveRoom = JSON.parse(localStorage.getItem("activeRoom"));
+      const defaultRoom = data.find((room) => room.id === "room-3") || data[0];
+      const selectedRoom = storedActiveRoom || defaultRoom;
+      setActiveRoom(selectedRoom);
+    })();
   }, []);
 
-  // Fetch messages from backend when activeRoom changes
   useEffect(() => {
     if (!activeRoom) return;
-    fetch(`http://localhost:8000/api/rooms/${activeRoom.id}/messages`)
-      .then((res) => res.json())
-      .then((msgs) => setMessages(msgs))
-      .catch(() => setMessages([]));
+    fetchMessages(activeRoom.id);
   }, [activeRoom]);
 
   // WebSocket for real-time updates
@@ -112,6 +111,8 @@ function Chats() {
     };
     socketRef.current.send(JSON.stringify(message));
     setInput("");
+    // Re-fetch messages after sending
+    setTimeout(() => fetchMessages(activeRoom.id), 300);
   };
 
   const handleFileUpload = (e) => {
@@ -135,52 +136,43 @@ function Chats() {
         id: uuidv4(),
       };
       socketRef.current.send(JSON.stringify(message));
+      // Re-fetch messages after sending file
+      setTimeout(() => fetchMessages(activeRoom.id), 300);
     };
     reader.readAsDataURL(file);
   };
 
-
-  const switchRoom = (room) => {
+  const switchRoom = async (room) => {
     setActiveRoom(room);
     localStorage.setItem("activeRoom", JSON.stringify(room));
-
-    // Fetch messages for the new room
-    fetch(`http://localhost:8000/api/rooms/${room.id}/messages`)
-      .then((res) => res.json())
-      .then((msgs) => setMessages(msgs))
-      .catch(() => setMessages([]));
-
+    await fetchMessages(room.id);
     socketRef.current?.send(
       JSON.stringify({ type: "join", room: room.id })
     );
   };
 
-  const handleCreateRoom = () => {
+  const handleCreateRoom = async () => {
     if (!newRoomName.trim()) {
       toast.error("Room name can't be empty");
       return;
     }
-
     const newRoom = {
       id: `room-${Date.now()}`,
       name: newRoomName.trim(),
     };
-
-    fetch("http://localhost:8000/api/rooms", {
+    await fetch("http://localhost:8000/api/rooms", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(newRoom),
-    }).catch(() => { });
-
-    const updatedRooms = [...rooms, newRoom];
-    setRooms(updatedRooms);
-    setActiveRoom(newRoom);
+    });
+    // Re-fetch rooms from backend
+    const updatedRooms = await fetchRooms();
+    const createdRoom = updatedRooms.find((r) => r.id === newRoom.id);
+    setActiveRoom(createdRoom || updatedRooms[0]);
     setMessages([]);
     setNewRoomName("");
-
     localStorage.setItem("chatRooms", JSON.stringify(updatedRooms));
-    localStorage.setItem("activeRoom", JSON.stringify(newRoom));
-
+    localStorage.setItem("activeRoom", JSON.stringify(createdRoom || updatedRooms[0]));
     toast.success("Room created successfully");
   };
 

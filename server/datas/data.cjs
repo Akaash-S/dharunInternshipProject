@@ -87,5 +87,21 @@ router.get("/api/export/all", async (req, res) => {
     }
 });
 
+// Return users as JSON
+router.get("/api/export/users/json", (req, res) => {
+    db.all("SELECT * FROM users ORDER BY id ASC", (err, rows) => {
+        if (err) return res.status(500).json({ error: "Failed to fetch users" });
+        res.json(rows);
+    });
+});
+
+// Return rooms as JSON
+router.get("/api/export/rooms/json", (req, res) => {
+    db.all("SELECT * FROM rooms ORDER BY id ASC", (err, rows) => {
+        if (err) return res.status(500).json({ error: "Failed to fetch rooms" });
+        res.json(rows);
+    });
+});
+
 module.exports = router;
 

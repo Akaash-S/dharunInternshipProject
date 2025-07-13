@@ -106,29 +106,44 @@ wss.on("connection", (ws) => {
   });
 });
 
-// REST: Create a new chat room
-app.post("/api/create-room", (req, res) => {
-  const { roomId, name } = req.body;
-
-  if (!roomId || rooms[roomId]) {
-    return res.status(400).json({ error: "Room already exists or ID invalid" });
+// REST: Create a new chat room (persisted in DB and in-memory)
+app.post("/api/rooms", (req, res) => {
+  const { id, name } = req.body;
+  if (!id || !name) {
+    return res.status(400).json({ error: "Room id and name are required" });
   }
-
-  rooms[roomId] = {
-    name: name || roomId,
-    messages: [],
-  };
-
-  return res.status(201).json({ message: "Room created successfully" });
+  // Insert into SQLite
+  db.run(
+    "INSERT INTO rooms (id, name) VALUES (?, ?)",
+    [id, name],
+    function (err) {
+      if (err) {
+        if (err.message.includes("UNIQUE")) {
+          return res.status(400).json({ error: "Room already exists" });
+        }
+        return res.status(500).json({ error: "Failed to create room" });
+      }
+      // Also update in-memory rooms
+      if (!rooms[id]) {
+        rooms[id] = { name, messages: [] };
+      }
+      return res.status(201).json({ message: "Room created successfully" });
+    }
+  );
 });
 
-// REST: Get all chat rooms (id + name only)
+// REST: Get all chat rooms (id + name only, from DB)
 app.get("/api/rooms", (req, res) => {
-  const formattedRooms = Object.entries(rooms).map(([id, data]) => ({
-    id,
-    name: data.name,
-  }));
-  res.json(formattedRooms);
+  db.all("SELECT id, name FROM rooms ORDER BY id ASC", (err, rows) => {
+    if (err) return res.status(500).json({ error: "Failed to fetch rooms" });
+    // Also update in-memory rooms for real-time
+    rows.forEach((room) => {
+      if (!rooms[room.id]) {
+        rooms[room.id] = { name: room.name, messages: [] };
+      }
+    });
+    res.json(rows);
+  });
 });
 
 // REST: Get messages of a specific room (from DB)
