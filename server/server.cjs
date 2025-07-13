@@ -9,7 +9,8 @@ const bcrypt = require("bcrypt");
 const sqlite3 = require("sqlite3").verbose();
 const multer = require("multer");
 const { v4: uuidv4 } = require("uuid");
-
+const ExcelJS = require("exceljs");
+const exportRoutes = require("./datas/data.cjs");
 const app = express();
 const server = http.createServer(app);
 const wss = new WebSocketServer({ server, path: "/ws/chat" });
@@ -39,12 +40,15 @@ const upload = multer({
 // Ensure uploads/avatars directory exists
 fs.mkdirSync(path.join(__dirname, "uploads/avatars"), { recursive: true });
 
+// Add file_data column if not present (manual migration may be needed)
+// db.run(`ALTER TABLE messages ADD COLUMN IF NOT EXISTS file_data BLOB`); // REMOVE THIS LINE: SQLite does not support IF NOT EXISTS for ADD COLUMN. Do schema changes manually if needed.
+
 // Save chat message to SQLite
-function saveMessageToDB({ room, sender, content, fileUrl, fileName, fileSize, time }) {
+function saveMessageToDB({ room, sender, content, fileUrl, fileName, fileSize, time, fileData }) {
   db.run(
-    `INSERT INTO messages (room_id, sender, content, file_url, file_name, file_size, time)
-     VALUES (?, ?, ?, ?, ?, ?, ?)`,
-    [room, sender, content, fileUrl || null, fileName || null, fileSize || null, time],
+    `INSERT INTO messages (room_id, sender, content, file_url, file_name, file_size, file_data, time)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+    [room, sender, content, fileUrl || null, fileName || null, fileSize || null, fileData || null, time],
     (err) => {
       if (err) console.error('Failed to save message to DB:', err);
     }
@@ -68,7 +72,7 @@ wss.on("connection", (ws) => {
         ws.roomId = room;
 
       } else if (data.type === "message") {
-        const { room, content, sender, time, fileUrl, fileName, fileSize, id } = data;
+        const { room, content, sender, time, fileUrl, fileName, fileSize, id, fileData } = data;
         const msgObj = { content, sender, time };
         if (fileUrl && fileName && fileSize) {
           msgObj.fileUrl = fileUrl;
@@ -80,8 +84,8 @@ wss.on("connection", (ws) => {
         if (rooms[room]) {
           rooms[room].messages.push(msgObj);
         }
-        // Save message to DB
-        saveMessageToDB({ room, sender, content, fileUrl, fileName, fileSize, time });
+        // Save message to DB (now with fileData)
+        saveMessageToDB({ room, sender, content, fileUrl, fileName, fileSize, time, fileData });
         // Broadcast to everyone in that room
         wss.clients.forEach((client) => {
           if (
@@ -196,7 +200,10 @@ app.post("/api/login", async (req, res) => {
   } catch (err) {
     return res.status(500).json({ error: "Internal server error" });
   }
-});
+});               
+
+app.use(exportRoutes);
+
 
 // Start the server
 const PORT = 8000;

@@ -5,6 +5,7 @@ import Dashboard from "./pages/Dashboard";
 import Settings from "./pages/Settings";
 import Chats from "./pages/Chats";
 import Files from "./pages/Files";
+import Exports from "./pages/Exports";
 import { Toaster } from "react-hot-toast";
 
 function App() {
@@ -31,6 +32,7 @@ function App() {
           <Route path="/chats" element={<Chats />} />
           <Route path="/files" element={<Files />} />
         </Route>
+        <Route path="/exports" element={<Exports />} />
       </Routes>
     </>
   );
