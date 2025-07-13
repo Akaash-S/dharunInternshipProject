@@ -159,6 +159,19 @@ app.get("/api/rooms/:roomId/messages", (req, res) => {
   );
 });
 
+// GET /api/data/export?table=my_table_name - Export all rows from a specific table as JSON
+app.get("/api/data/export", (req, res) => {
+  const allowedTables = ["users", "rooms", "messages"];
+  const table = req.query.table;
+  if (!table || !allowedTables.includes(table)) {
+    return res.status(400).json({ error: "Invalid or missing table name" });
+  }
+  db.all(`SELECT * FROM ${table}`, (err, rows) => {
+    if (err) return res.status(500).json({ error: "Failed to fetch data" });
+    res.json(rows);
+  });
+});
+
 // Signup endpoint
 app.post("/api/signup", upload.single("avatar"), async (req, res) => {
   try {
