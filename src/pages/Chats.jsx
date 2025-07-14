@@ -58,32 +58,49 @@ function Chats() {
 
   // WebSocket for real-time updates
   useEffect(() => {
-    if (!activeRoom) return;
-
     socketRef.current = new WebSocket("ws://localhost:8000/ws/chat");
 
     socketRef.current.onopen = () => {
-      setWsConnected(true); // Mark WebSocket as connected
-      socketRef.current.send(
-        JSON.stringify({ type: "join", room: activeRoom.id })
-      );
+      setWsConnected(true);
+      if (activeRoom) {
+        socketRef.current.send(
+          JSON.stringify({ type: "join", room: activeRoom.id })
+        );
+      }
     };
 
     socketRef.current.onmessage = (event) => {
       const data = JSON.parse(event.data);
       if (data.type === "message") {
         setMessages((prev) => [...prev, data.message]);
+      } else if (data.type === "error") {
+        toast.error(data.message || "Server error");
       }
     };
 
-    socketRef.current.onerror = () => {
-      setWsConnected(false); // Mark as disconnected on error
+    socketRef.current.onerror = (e) => {
+      setWsConnected(false);
+      toast.error("WebSocket error. Check your connection.");
     };
-    socketRef.current.onclose = () => {
-      setWsConnected(false); // Mark as disconnected on close
+    socketRef.current.onclose = (e) => {
+      setWsConnected(false);
+      toast.error(`WebSocket closed: ${e.reason || 'Connection lost.'}`);
     };
 
-    return () => socketRef.current.close();
+    return () => {
+      socketRef.current?.close();
+    };
+  }, []); // Only run once on mount
+
+  // Send join message when activeRoom changes
+  useEffect(() => {
+    if (socketRef.current && activeRoom) {
+      socketRef.current.send(
+        JSON.stringify({ type: "join", room: activeRoom.id })
+      );
+      fetchMessages(activeRoom.id);
+    }
+    // eslint-disable-next-line
   }, [activeRoom]);
 
   useEffect(() => {
@@ -109,52 +126,75 @@ function Chats() {
       room: activeRoom.id,
       content: input,
       sender: getDisplayName(user),
-      time: new Date().toLocaleTimeString([], {
-        hour: "2-digit",
-        minute: "2-digit",
-      }),
+      time: Date.now(), // Use UNIX timestamp
       id: uuidv4(),
     };
-    socketRef.current.send(JSON.stringify(message));
-    setInput("");
-    // Re-fetch messages after sending
-    setTimeout(() => fetchMessages(activeRoom.id), 300);
+    try {
+      socketRef.current.send(JSON.stringify(message));
+      setInput("");
+      // Wait for error or success from server before fetching
+      setTimeout(() => {
+        if (wsConnected) fetchMessages(activeRoom.id);
+      }, 300);
+    } catch (err) {
+      toast.error("Failed to send message.");
+    }
   };
 
-  const handleFileUpload = (e) => {
+  const handleFileUpload = async (e) => {
     const file = e.target.files[0];
     if (!file) return;
-    const reader = new FileReader();
-    reader.onload = (event) => {
-      const timestamp = new Date().toLocaleTimeString([], {
-        hour: "2-digit",
-        minute: "2-digit",
+    // Upload file to backend, get public URL
+    const formData = new FormData();
+    formData.append("file", file);
+    let fileUrl = null, fileName = file.name, fileSize = file.size;
+    try {
+      const res = await fetch("http://localhost:8000/api/upload", {
+        method: "POST",
+        body: formData,
       });
-      const message = {
-        type: "message",
-        room: activeRoom.id,
-        content: `File: ${file.name}`,
-        fileUrl: event.target.result,
-        fileName: file.name,
-        fileSize: `${(file.size / 1024).toFixed(1)} KB`,
-        sender: getDisplayName(user),
-        time: timestamp,
-        id: uuidv4(),
-      };
-      socketRef.current.send(JSON.stringify(message));
-      // Re-fetch messages after sending file
-      setTimeout(() => fetchMessages(activeRoom.id), 300);
+      const data = await res.json();
+      if (res.ok && data.fileUrl) {
+        fileUrl = data.fileUrl;
+        fileName = data.fileName;
+        fileSize = data.fileSize;
+      } else {
+        toast.error("File upload failed");
+        return;
+      }
+    } catch {
+      toast.error("File upload failed");
+      return;
+    }
+    const message = {
+      type: "message",
+      room: activeRoom.id,
+      content: `File: ${fileName}`,
+      fileUrl,
+      fileName,
+      fileSize,
+      sender: getDisplayName(user),
+      time: Date.now(),
+      id: uuidv4(),
     };
-    reader.readAsDataURL(file);
+    try {
+      socketRef.current.send(JSON.stringify(message));
+      // Wait for error or success from server before fetching
+      setTimeout(() => {
+        if (wsConnected) fetchMessages(activeRoom.id);
+      }, 300);
+    } catch (err) {
+      toast.error("Failed to send file message.");
+    }
   };
 
   const switchRoom = async (room) => {
     setActiveRoom(room);
     localStorage.setItem("activeRoom", JSON.stringify(room));
-    await fetchMessages(room.id);
-    socketRef.current?.send(
-      JSON.stringify({ type: "join", room: room.id })
-    );
+    // fetchMessages(room.id); // Now handled in useEffect
+    // socketRef.current?.send(
+    //   JSON.stringify({ type: "join", room: room.id })
+    // );
   };
 
   const handleCreateRoom = async () => {
