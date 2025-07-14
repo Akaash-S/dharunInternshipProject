@@ -13,6 +13,7 @@ function Chats() {
   const socketRef = useRef(null);
   const user = JSON.parse(localStorage.getItem("user"));
   const [isOnline, setIsOnline] = useState(navigator.onLine);
+  const [wsConnected, setWsConnected] = useState(false); // New state for WebSocket status
 
   // Helper to fetch rooms from backend
   const fetchRooms = async () => {
@@ -62,6 +63,7 @@ function Chats() {
     socketRef.current = new WebSocket("ws://localhost:8000/ws/chat");
 
     socketRef.current.onopen = () => {
+      setWsConnected(true); // Mark WebSocket as connected
       socketRef.current.send(
         JSON.stringify({ type: "join", room: activeRoom.id })
       );
@@ -74,8 +76,12 @@ function Chats() {
       }
     };
 
-    socketRef.current.onerror = () => { };
-    socketRef.current.onclose = () => { };
+    socketRef.current.onerror = () => {
+      setWsConnected(false); // Mark as disconnected on error
+    };
+    socketRef.current.onclose = () => {
+      setWsConnected(false); // Mark as disconnected on close
+    };
 
     return () => socketRef.current.close();
   }, [activeRoom]);
@@ -228,8 +234,8 @@ function Chats() {
             {activeRoom?.name || "Select a Room"}
           </h3>
           <div className="flex items-center gap-2">
-            <div className={`w-3 h-3 rounded-full ${isOnline ? "bg-green-500" : "bg-red-500"}`} title={isOnline ? "Online" : "Offline"}></div>
-            <span className="text-xs text-gray-600">{isOnline ? "Online" : "Offline"}</span>
+            <div className={`w-3 h-3 rounded-full ${isOnline && wsConnected ? "bg-green-500" : "bg-red-500"}`} title={isOnline && wsConnected ? "Online" : "Offline"}></div>
+            <span className="text-xs text-gray-600">{isOnline && wsConnected ? "Online" : "Offline"}</span>
           </div>
         </div>
 

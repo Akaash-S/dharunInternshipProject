@@ -66,11 +66,18 @@ wss.on("connection", (ws) => {
       if (data.type === "join") {
         const { room } = data;
         if (!rooms[room]) {
-          // Auto-create if not found
-          rooms[room] = { name: room, messages: [] };
+          // Try to fetch the room name from the database
+          db.get("SELECT name FROM rooms WHERE id = ?", [room], (err, row) => {
+            if (row && row.name) {
+              rooms[room] = { name: row.name, messages: [] };
+            } else {
+              rooms[room] = { name: room, messages: [] };
+            }
+            ws.roomId = room;
+          });
+        } else {
+          ws.roomId = room;
         }
-        ws.roomId = room;
-
       } else if (data.type === "message") {
         const { room, content, sender, time, fileUrl, fileName, fileSize, id, fileData } = data;
         const msgObj = { content, sender, time };
